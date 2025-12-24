@@ -23,7 +23,7 @@ const switchToArchive = () => {
 <template>
   <div class="mode-switcher">
     <button
-        class="mode-button"
+        class="mode-button mode-button_mr2"
         :class="{ active: isOnlineMode }"
         @click="switchToOnline"
     >
@@ -53,7 +53,7 @@ const switchToArchive = () => {
   flex: 1;
   padding: 8px 16px;
   border: none;
-  background: none;
+  background: #d5d5d5;
   border-radius: 6px;
   cursor: pointer;
   font-weight: 500;
@@ -61,12 +61,15 @@ const switchToArchive = () => {
 }
 
 .mode-button:hover {
-  background: #f0f0f0;
+  background: #a9a9a9;
 }
 
 .mode-button.active {
   background: #1976d2;
   color: white;
   box-shadow: 0 2px 4px rgba(25, 118, 210, 0.3);
+}
+.mode-button_mr2 {
+  margin-right: 2px;
 }
 </style>

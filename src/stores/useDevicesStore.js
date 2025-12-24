@@ -4,9 +4,9 @@ import { ref, computed } from 'vue'
 export const useDevicesStore = defineStore('devices', () => {
     const devices = ref({})
     const groups = ref([])
-    const ungroupedDeviceIds = ref([]) // ID устройств без групп
-    const onlineSelectedDevices = ref({}) // { deviceId: { cameras: [1,2,3] } }
-    const archiveSelectedDevices = ref({}) // { deviceId: { cameras: [1,2,3] } }
+    const ungroupedDeviceIds = ref([])
+    const onlineSelectedDevices = ref({})
+    const archiveSelectedDevices = ref({})
     const getSelectedDevices = (isOnlineMode) => {
         return isOnlineMode ? onlineSelectedDevices.value : archiveSelectedDevices.value
     }

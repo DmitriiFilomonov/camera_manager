@@ -69,6 +69,9 @@ const toggleSelection = () => {
         <div class="device-name">{{ device.name }}</div>
         <div class="device-id">ID: {{ device.id }}</div>
       </div>
+      <div class="alarm-icon" v-if="!isArchiveMode && device.alarm">
+        <div class="alarm-triangle pulse"></div>
+      </div>
       <div class="wifi-status" v-if="!isArchiveMode">
         <div class="wifi-bars">
           <div v-for="n in 5"
@@ -78,9 +81,6 @@ const toggleSelection = () => {
                :style="getWifiBarStyle(n)">
           </div>
         </div>
-      </div>
-      <div class="alarm-icon" v-if="!isArchiveMode && device.alarm">
-        <div class="alarm-triangle pulse"></div>
       </div>
       <DropdownMenu :device-id="device.id" />
     </div>
@@ -102,10 +102,6 @@ const toggleSelection = () => {
 
 .device-item:hover {
   border-color: #c0c0c0;
-}
-
-.device-item.in-archive-mode {
-  opacity: 0.7;
 }
 
 .device-row {
@@ -154,7 +150,6 @@ const toggleSelection = () => {
 }
 
 .device-checkbox:disabled {
-  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -173,8 +168,7 @@ const toggleSelection = () => {
 
 .device-name {
   font-weight: 500;
-  color: #333;
-  white-space: nowrap;
+  color: #000000;
   overflow: hidden;
   text-overflow: ellipsis;
 }

@@ -1,244 +1,296 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import { ref, onMounted, onUnmounted, watch, nextTick, computed } from 'vue'
 import { useAppStore } from '@/stores/useAppStore'
 import { useDevicesStore } from '@/stores/useDevicesStore'
-import { useMapStore } from '@/stores/useMapStore'
 import { loadYandexMaps } from '@/services/yandexMaps'
 
-const mapContainer = ref(null)
+let mapContainer
+let mapInstance
 const isLoading = ref(true)
 const loadError = ref(false)
-const map = ref(null)
-const objectManager = ref(null)
-
 const appStore = useAppStore()
 const devicesStore = useDevicesStore()
-const mapStore = useMapStore()
+const activePlacemarkIds = ref(new Set())
 const devicesForMap = computed(() => {
   return devicesStore.getDevicesForMapByMode(appStore.isOnlineMode)
 })
-
-const initMap = async () => {
-  try {
-    isLoading.value = true
-    loadError.value = false
-    await loadYandexMaps()
-    await new Promise(resolve => setTimeout(resolve, 100))
-    if (!mapContainer.value) return
-    const { ymaps } = window
-    map.value = new ymaps.Map(mapContainer.value, {
-      center: [55.751244, 37.618423], // Москва по умолчанию
-      zoom: 10,
-      controls: ['zoomControl', 'fullscreenControl']
-    })
-    objectManager.value = new ymaps.ObjectManager({
-      clusterize: false,
-      gridSize: 64,
-      clusterDisableClickZoom: true
-    })
-    objectManager.value.objects.options.set({
-      iconLayout: 'default#image',
-      iconImageSize: [32, 32],
-      iconImageOffset: [-16, -32],
-      balloonOffset: [0, -20],
-      balloonCloseButton: true,
-      hideIconOnBalloonOpen: false
-    })
-    objectManager.value.objects.options.set('preset', 'islands#circleIcon')
-    map.value.geoObjects.add(objectManager.value)
-    mapStore.setMapInstance(map.value)
-    mapStore.setObjectManager(objectManager.value)
-    updateMapMarkers()
-
-    isLoading.value = false
-
-  } catch (error) {
-    console.error('Error loading Yandex Maps:', error)
-    isLoading.value = false
+const initializeMap = async () => {
+  isLoading.value = true
+  loadError.value = false
+  const ymaps = await loadYandexMaps()
+  if (!ymaps) {
     loadError.value = true
+    isLoading.value = false
+    return
   }
+  mapInstance = new ymaps.Map(mapContainer, {
+    center: [55.751244, 37.618423],
+    zoom: 5,
+    controls: ['zoomControl']
+  })
+
+  checkAndSyncPlacemarks()
+  isLoading.value = false
 }
 
-const updateMapMarkers = () => {
-  if (!objectManager.value) return
-  objectManager.value.removeAll()
-  if (devicesForMap.value.length === 0) return
-  const features = devicesForMap.value.map(device => ({
-    type: 'Feature',
-    id: device.id,
-    geometry: {
-      type: 'Point',
-      coordinates: [device.lon, device.lat]
-    },
-    properties: {
-      balloonContent: getBalloonContent(device),
-      hintContent: device.name,
-      // Цвет метки: красный для тревоги в онлайн режиме, синий в остальных случаях
-      iconColor: device.alarm && appStore.isOnlineMode ? '#ff4444' : '#1976d2'
+const checkAndSyncPlacemarks = () => {
+  const currentDeviceIds = new Set(devicesForMap.value.map(d => d.id))
+
+  activePlacemarkIds.value.forEach(placemarkId => {
+    if (!currentDeviceIds.has(placemarkId)) {
+      removePlacemark(placemarkId)
+      centerMap()
     }
-  }))
-  objectManager.value.add(features)
-  mapStore.fitToDevices(devicesForMap.value)
+  })
+
+  devicesForMap.value.forEach(device => {
+    if (!activePlacemarkIds.value.has(device.id)) {
+      addPlacemark(device)
+      centerMap()
+    }
+  })
 }
 
-const getBalloonContent = (device) => {
-  return `
-    <div class="map-balloon">
-      <div class="balloon-header">
-        <strong>${device.name}</strong>
-        ${device.alarm && appStore.isOnlineMode ? '<span class="alarm-badge">ТРЕВОГА</span>' : ''}
-      </div>
-      <div class="balloon-content">
-        <div><strong>ID:</strong> ${device.id}</div>
-        <div><strong>Каналов:</strong> ${device.channels}</div>
-        <div><strong>Время:</strong> ${device.timestamp}</div>
-        <div><strong>Координаты:</strong> ${device.lat.toFixed(6)}, ${device.lon.toFixed(6)}</div>
-        ${device.selectedCameras.length > 0 ?
-      `<div><strong>Выбранные камеры:</strong> ${device.selectedCameras.join(', ')}</div>` :
-      ''
+const addPlacemark = (device) => {
+  const placemark = new window.ymaps.Placemark(
+      [device.lat, device.lon],
+      {
+        balloonContent: `
+        <div style="padding: 10px; max-width: 250px;">
+          <div style="font-weight: bold; margin-bottom: 5px;">${device.name}</div>
+          <div><strong>ID:</strong> ${device.id}</div>
+          <div><strong>Каналы:</strong> ${device.channels}</div>
+          <div><strong>Время:</strong> ${device.timestamp}</div>
+          <div><strong>Координаты:</strong> ${device.lat.toFixed(6)}, ${device.lon.toFixed(6)}</div>
+          <div><strong>WiFi:</strong> ${device.wifi}/5</div>
+          ${device.alarm ? '<div style="color: #ff0000; font-weight: bold;">ТРЕВОГА</div>' : ''}
+        </div>
+      `,
+        hintContent: device.name
+      }
+  )
+
+  mapInstance.geoObjects.add(placemark)
+  activePlacemarkIds.value.add(device.id)
+
+  savePlacemarkState(device.id, true)
+}
+
+const removePlacemark = (deviceId) => {
+  if (!mapInstance) return
+
+  const geoObjects = mapInstance.geoObjects
+  const objectsToRemove = []
+
+  geoObjects.each((geoObject) => {
+    if (geoObject.properties && geoObject.properties.get) {
+      const balloonContent = geoObject.properties.get('balloonContent')
+      if (balloonContent && balloonContent.includes(`ID:</strong> ${deviceId}`)) {
+        objectsToRemove.push(geoObject)
+      }
+    }
+  })
+
+  objectsToRemove.forEach(obj => {
+    geoObjects.remove(obj)
+  })
+
+  activePlacemarkIds.value.delete(deviceId)
+  savePlacemarkState(deviceId, false)
+}
+const savePlacemarkState = (deviceId, isActive) => {
+  const storageKey = `placemark_${deviceId}`
+  if (isActive) {
+    localStorage.setItem(storageKey, 'true')
+  } else {
+    localStorage.removeItem(storageKey)
   }
-      </div>
-    </div>
-  `
 }
 
+const centerMap = () => {
+  if (!mapInstance || activePlacemarkIds.value.size === 0) return
+
+  const geoObjects = mapInstance.geoObjects
+  const coordinates = []
+
+  geoObjects.each((geoObject) => {
+    if (geoObject.geometry && geoObject.geometry.getCoordinates) {
+      const coords = geoObject.geometry.getCoordinates()
+      if (coords && coords.length === 2) {
+        coordinates.push(coords)
+      }
+    }
+  })
+
+  if (coordinates.length === 0) return
+
+  if (coordinates.length === 1) {
+    mapInstance.setCenter(coordinates[0], 12)
+  } else {
+    const lats = coordinates.map(c => c[0])
+    const lons = coordinates.map(c => c[1])
+
+    const minLat = Math.min(...lats)
+    const maxLat = Math.max(...lats)
+    const minLon = Math.min(...lons)
+    const maxLon = Math.max(...lons)
+
+    const centerLat = (minLat + maxLat) / 2
+    const centerLon = (minLon + maxLon) / 2
+
+    const latDiff = maxLat - minLat
+    const lonDiff = maxLon - minLon
+    const maxDiff = Math.max(latDiff, lonDiff)
+
+    let zoom = 12
+    if (maxDiff > 10) zoom = 5
+    else if (maxDiff > 5) zoom = 6
+    else if (maxDiff > 2) zoom = 8
+    else if (maxDiff > 1) zoom = 9
+    else if (maxDiff > 0.5) zoom = 10
+    else if (maxDiff > 0.2) zoom = 11
+
+    mapInstance.setCenter([centerLat, centerLon], zoom)
+  }
+}
 
 watch(
-    () => devicesForMap.value,
-    (newDevices, oldDevices) => {
-      // Сравниваем по ID, чтобы не обновлять при одинаковых устройствах
-      const oldIds = oldDevices?.map(d => d.id) || []
-      const newIds = newDevices.map(d => d.id)
-
-      if (JSON.stringify(oldIds.sort()) !== JSON.stringify(newIds.sort())) {
-        updateMapMarkers()
-      }
+    devicesForMap,
+    () => {
+      nextTick(() => {
+        if (mapInstance) {
+          checkAndSyncPlacemarks()
+        }
+      })
     },
     { deep: true }
 )
+
 watch(
     () => appStore.mode,
     () => {
-      updateMapMarkers()
+      nextTick(() => {
+        if (mapInstance) {
+          checkAndSyncPlacemarks()
+        }
+      })
     }
 )
+
 onMounted(() => {
-  initMap()
+  initializeMap()
 })
+
 onUnmounted(() => {
-  if (map.value) {
-    map.value.destroy()
+  if (mapInstance && mapInstance.destroy) {
+    mapInstance.destroy()
   }
 })
 </script>
 
 <template>
-  <div class="map-container">
-    <div ref="mapContainer" class="map"></div>
-
-    <div v-if="isLoading" class="loading-indicator">
-      Загрузка карты...
+  <div class="map-wrapper">
+    <div ref="mapContainer" class="map-container"></div>
+    <div v-if="isLoading" class="map-overlay loading">
+      <div class="spinner"></div>
+      <div class="loading-text">Загрузка карты...</div>
     </div>
-
-    <div v-if="loadError" class="error-message">
-      Ошибка загрузки Яндекс.Карт. Проверьте API ключ.
+    <div v-if="loadError && !isLoading" class="map-overlay error">
+      <div class="error-content">
+        <div class="error-icon">⚠️</div>
+        <h3>Ошибка загрузки карты</h3>
+        <p>Проверьте подключение к интернету и API ключ</p>
+        <button @click="initializeMap" class="retry-button">Повторить</button>
+      </div>
     </div>
   </div>
 </template>
 
 <style scoped>
-.map-container {
+.map-wrapper {
   width: 100%;
   height: 100%;
   position: relative;
 }
 
-.map {
+.map-container {
   width: 100%;
   height: 100%;
+  min-height: 500px;
 }
 
-.loading-indicator {
+.map-overlay {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: rgba(255, 255, 255, 0.9);
-  padding: 20px 30px;
-  border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  z-index: 1000;
-}
-
-.error-message {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  background: #ffebee;
-  color: #d32f2f;
-  padding: 20px 30px;
-  border-radius: 8px;
-  border: 1px solid #ffcdd2;
-  text-align: center;
-  max-width: 80%;
-  z-index: 1000;
-}
-</style>
-
-<style>
-.map-balloon {
-  padding: 10px;
-  max-width: 300px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-}
-
-.balloon-header {
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #e0e0e0;
+  justify-content: center;
+  z-index: 1000;
 }
 
-.balloon-header strong {
+.map-overlay.loading {
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #1976d2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 20px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-text {
   font-size: 16px;
   color: #333;
+  font-weight: 500;
 }
 
-.alarm-badge {
-  background: #ff4444;
+.map-overlay.error {
+  background: rgba(255, 255, 255, 0.98);
+}
+
+.error-content {
+  text-align: center;
+  padding: 30px;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+  max-width: 400px;
+}
+
+.error-icon {
+  font-size: 60px;
+  margin-bottom: 20px;
+}
+
+.error-content h3 {
+  margin: 0 0 10px 0;
+  color: #d32f2f;
+}
+
+.error-content p {
+  margin: 0 0 20px 0;
+  color: #666;
+}
+
+.retry-button {
+  background: #1976d2;
   color: white;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: bold;
-  animation: pulse 1s infinite;
-}
-
-.balloon-content {
+  border: none;
+  padding: 10px 24px;
+  border-radius: 6px;
   font-size: 14px;
-  color: #555;
-}
-
-.balloon-content div {
-  margin-bottom: 6px;
-}
-
-.balloon-content strong {
-  color: #333;
-  margin-right: 5px;
-}
-.ymaps-2-1-79-placemark-overlay {
-  cursor: pointer !important;
-}
-.ymaps-2-1-79-balloon__content {
-  padding: 0 !important;
-  margin: 0 !important;
-}
-.ymaps-2-1-79-balloon {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15) !important;
-  border-radius: 8px !important;
+  cursor: pointer;
 }
 </style>

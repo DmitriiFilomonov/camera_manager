@@ -163,11 +163,11 @@ body {
     }
 
     .device-name {
-        color: #e0e0e0;
+        color: #000000;
     }
 
     .device-id {
-        color: #a0a0a0;
+        color: #666666;
     }
 
     .device-group {
@@ -186,7 +186,7 @@ body {
     }
 
     .mode-button {
-        color: #e0e0e0;
+        color: #cacaca;
     }
 
     .mode-button:hover {
